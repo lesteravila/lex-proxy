@@ -75,14 +75,7 @@ async def tts_proxy(request: Request):
 # ── /stt-token — Deepgram short-lived token ───────────────────────────────────
 @app.get("/stt-token")
 async def stt_token():
-    """Mint a Deepgram temporary key that expires in 10 seconds.
-    The browser uses this for the WebSocket — master key never leaves the server."""
-    async with httpx.AsyncClient(timeout=10) as client:
-        resp = await client.post(
-            "https://api.deepgram.com/v1/projects/tokens",   # adjust if you have a project ID
-            headers={"Authorization": f"Token {DEEPGRAM_KEY}"},
-            json={"comment": "lex-session", "scopes": ["usage:write"], "time_to_live_in_seconds": 10},
-        )
+    return JSONResponse({"key": DEEPGRAM_KEY})
     if resp.status_code != 200:
         # fallback: return a scoped token via the key grant endpoint
         async with httpx.AsyncClient(timeout=10) as client:
