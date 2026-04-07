@@ -76,18 +76,6 @@ async def tts_proxy(request: Request):
 @app.get("/stt-token")
 async def stt_token():
     return JSONResponse({"key": DEEPGRAM_KEY})
-    if resp.status_code != 200:
-        # fallback: return a scoped token via the key grant endpoint
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp2 = await client.post(
-                "https://api.deepgram.com/v1/auth/grant",
-                headers={"Authorization": f"Token {DEEPGRAM_KEY}"},
-                json={"type": "temporary", "time_to_live_in_seconds": 60},
-            )
-        if resp2.status_code == 200:
-            return JSONResponse({"key": resp2.json().get("key", "")})
-        raise HTTPException(status_code=500, detail="Could not mint Deepgram token")
-    return JSONResponse({"key": resp.json().get("key", "")})
 
 
 # ── /telegram — send a message ────────────────────────────────────────────────
