@@ -29,7 +29,7 @@ DEEPGRAM_KEY       = os.environ["DEEPGRAM_API_KEY"]
 GEMINI_KEY         = os.environ["GEMINI_API_KEY"]
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 
-VOICE_MAP = {"male": "Puck", "female": "Kore"}
+VOICE_MAP = {"male": "Charon", "female": "Kore"}
 
 def pcm_to_wav(raw: bytes) -> bytes:
     sr, ch, bits = 24000, 1, 16
