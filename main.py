@@ -45,49 +45,35 @@ async def llm_proxy(request: Request):
     return JSONResponse(content=resp.json(), status_code=resp.status_code)
 
 # ── /tts — Gemini Text-to-Speech ──────────────────────────────────────────────
-# Replaces GCP TTS. Uses Gemini's REST TTS API — no websocket, no regional issues.
-# Frontend sends: { text: "...", voice: "male" | "female" }
-# Returns: { audioContent: "<base64 mp3>" }  (same shape as before — no frontend changes needed)
 @app.post("/tts")
 async def tts_proxy(request: Request):
     body = await request.json()
 
-    # Support both old GCP format and new simple format
     text = (
-        body.get("text")                          # simple: { text: "..." }
-        or body.get("input", {}).get("text", "")  # old GCP: { input: { text: "..." } }
+        body.get("text")
+        or body.get("input", {}).get("text", "")
     )
     if not text:
         raise HTTPException(status_code=400, detail="text is required")
 
-    # Determine voice — support both old GCP voice name and new simple gender string
     voice_raw = body.get("voice", "male")
     if isinstance(voice_raw, dict):
-        # Old GCP format: { voice: { name: "en-US-Neural2-F" } }
         name = voice_raw.get("name", "")
         gender = "female" if "-F" in name or "female" in name.lower() else "male"
     else:
-        # New simple format: { voice: "male" } or { voice: "female" }
         gender = "female" if voice_raw == "female" else "male"
 
     voice_name = VOICE_MAP[gender]
 
-    # Gemini TTS REST API
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key={GEMINI_KEY}"
 
     gemini_body = {
-        "contents": [
-            {
-                "parts": [{"text": text}]
-            }
-        ],
+        "contents": [{"parts": [{"text": text}]}],
         "generationConfig": {
             "responseModalities": ["AUDIO"],
             "speechConfig": {
                 "voiceConfig": {
-                    "prebuiltVoiceConfig": {
-                        "voiceName": voice_name
-                    }
+                    "prebuiltVoiceConfig": {"voiceName": voice_name}
                 }
             }
         }
@@ -101,16 +87,41 @@ async def tts_proxy(request: Request):
 
     data = resp.json()
 
-    # Extract audio bytes from Gemini response
     try:
-        audio_data = (
-            data["candidates"][0]["content"]["parts"][0]["inlineData"]["data"]
-        )
+        part = data["candidates"][0]["content"]["parts"][0]["inlineData"]
+        audio_b64 = part["data"]
+        mime_type  = part.get("mimeType", "audio/wav")
     except (KeyError, IndexError):
         raise HTTPException(status_code=500, detail="No audio in Gemini TTS response")
 
-    # Return in same shape as old GCP TTS so frontend needs no changes
-    return JSONResponse({"audioContent": audio_data})
+    # Gemini returns audio/wav or audio/pcm — convert PCM to WAV if needed
+    if "pcm" in mime_type:
+        import struct, base64 as b64mod
+        raw = b64mod.b64decode(audio_b64)
+        # Gemini PCM: 16-bit signed, mono, 24000 Hz
+        sample_rate   = 24000
+        num_channels  = 1
+        bits_per_sample = 16
+        byte_rate     = sample_rate * num_channels * bits_per_sample // 8
+        block_align   = num_channels * bits_per_sample // 8
+        data_size     = len(raw)
+        header = struct.pack(
+            '<4sI4s4sIHHIIHH4sI',
+            b'RIFF', 36 + data_size, b'WAVE',
+            b'fmt ', 16, 1,
+            num_channels, sample_rate, byte_rate,
+            block_align, bits_per_sample,
+            b'data', data_size
+        )
+        wav_bytes = header + raw
+        audio_b64 = b64mod.b64encode(wav_bytes).decode()
+        mime_type = "audio/wav"
+
+    # Return audioContent — frontend plays it as data URL
+    return JSONResponse({
+        "audioContent": audio_b64,
+        "mimeType": mime_type
+    })
 
 # ── /stt-token — Deepgram short-lived token ───────────────────────────────────
 @app.get("/stt-token")
