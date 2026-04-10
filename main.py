@@ -3,7 +3,7 @@ Lex Proxy — Railway deployment
 Keeps all API keys server-side.
 Endpoints:
   POST /llm        — Gemini LLM
-  POST /tts        — Deepgram TTS with caching
+  POST /tts        — Deepgram Aura-2 TTS with caching
   GET  /stt-token  — Deepgram short-lived token
   POST /telegram   — Telegram sendMessage
 """
@@ -34,8 +34,8 @@ GEMINI_KEY         = os.environ["GEMINI_API_KEY"]
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 
 VOICE_MAP = {
-    "male":   "aura-orion-en",    # male voice
-    "female": "aura-luna-en",     # female voice
+    "male":   "aura-2-mars-en",    # warm, natural male
+    "female": "aura-2-luna-en",    # soft, natural female
 }
 
 # ── In-memory TTS cache ───────────────────────────────────────────────────────
