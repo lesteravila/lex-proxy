@@ -13,9 +13,13 @@ import struct
 import base64 as b64mod
 import asyncio
 import httpx
+import logging
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = FastAPI()
 app.add_middleware(
@@ -50,7 +54,7 @@ def split_sentences(text: str) -> list:
     return [p.strip() for p in parts if p.strip()]
 
 async def tts_one(client, sentence: str, voice_name: str):
-    url  = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-preview-tts:generateContent?key={GEMINI_KEY}"
+    url  = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key={GEMINI_KEY}"
     body = {
         "contents": [{"parts": [{"text": sentence}]}],
         "generationConfig": {
@@ -65,6 +69,7 @@ async def tts_one(client, sentence: str, voice_name: str):
     try:
         resp = await client.post(url, json=body, timeout=20)
         if resp.status_code != 200:
+            logger.error(f"TTS API error {resp.status_code}: {resp.text}")
             return None
         data      = resp.json()
         part      = data["candidates"][0]["content"]["parts"][0]["inlineData"]
@@ -74,7 +79,8 @@ async def tts_one(client, sentence: str, voice_name: str):
             audio_b64 = b64mod.b64encode(pcm_to_wav(b64mod.b64decode(audio_b64))).decode()
             mime      = "audio/wav"
         return {"audioContent": audio_b64, "mimeType": mime}
-    except Exception:
+    except Exception as e:
+        logger.error(f"TTS exception: {e}")
         return None
 
 @app.post("/llm")
@@ -101,6 +107,7 @@ async def tts_proxy(request: Request):
 
     voice_name = VOICE_MAP[gender]
     sentences  = split_sentences(text)
+    logger.info(f"TTS request: {len(sentences)} sentences, voice={voice_name}")
 
     async with httpx.AsyncClient() as client:
         results = await asyncio.gather(*[tts_one(client, s, voice_name) for s in sentences])
