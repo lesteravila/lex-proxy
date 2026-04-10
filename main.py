@@ -50,7 +50,7 @@ def split_sentences(text: str) -> list:
     return [p.strip() for p in parts if p.strip()]
 
 async def tts_one(client, sentence: str, voice_name: str):
-    url  = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key={GEMINI_KEY}"
+    url  = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-preview-tts:generateContent?key={GEMINI_KEY}"
     body = {
         "contents": [{"parts": [{"text": sentence}]}],
         "generationConfig": {
