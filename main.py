@@ -34,8 +34,8 @@ GEMINI_KEY         = os.environ["GEMINI_API_KEY"]
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 
 VOICE_MAP = {
-    "male":   "aura-asteria-en",
-    "female": "aura-luna-en",
+    "male":   "aura-orion-en",    # male voice
+    "female": "aura-luna-en",     # female voice
 }
 
 # ── In-memory TTS cache ───────────────────────────────────────────────────────
