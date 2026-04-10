@@ -3,7 +3,7 @@ Lex Proxy — Railway deployment
 Keeps all API keys server-side.
 Endpoints:
   POST /llm        — Gemini LLM
-  POST /tts        — Gemini TTS with sentence-level parallelism
+  POST /tts        — Gemini TTS with sentence-level parallelism + caching
   GET  /stt-token  — Deepgram short-lived token
   POST /telegram   — Telegram sendMessage
 """
@@ -12,6 +12,7 @@ import re
 import struct
 import base64 as b64mod
 import asyncio
+import hashlib
 import httpx
 import logging
 from fastapi import FastAPI, Request, HTTPException
@@ -35,6 +36,27 @@ TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 
 VOICE_MAP = {"male": "Charon", "female": "Kore"}
 
+# ── In-memory TTS cache ───────────────────────────────────────────────────────
+# Key: hash of (sentence + voice), Value: {"audioContent": ..., "mimeType": ...}
+# Stores up to 500 entries — common greetings/phrases are reused across sessions
+_tts_cache: dict = {}
+MAX_CACHE_SIZE = 500
+
+def _cache_key(sentence: str, voice_name: str) -> str:
+    return hashlib.md5(f"{voice_name}:{sentence.strip().lower()}".encode()).hexdigest()
+
+def _cache_get(sentence: str, voice_name: str):
+    return _tts_cache.get(_cache_key(sentence, voice_name))
+
+def _cache_set(sentence: str, voice_name: str, value: dict):
+    if len(_tts_cache) >= MAX_CACHE_SIZE:
+        # Remove oldest 100 entries when cache is full
+        for k in list(_tts_cache.keys())[:100]:
+            del _tts_cache[k]
+    _tts_cache[_cache_key(sentence, voice_name)] = value
+
+# ─────────────────────────────────────────────────────────────────────────────
+
 def pcm_to_wav(raw: bytes) -> bytes:
     sr, ch, bits = 24000, 1, 16
     byte_rate    = sr * ch * bits // 8
@@ -54,6 +76,12 @@ def split_sentences(text: str) -> list:
     return [p.strip() for p in parts if p.strip()]
 
 async def tts_one(client, sentence: str, voice_name: str):
+    # Check cache first
+    cached = _cache_get(sentence, voice_name)
+    if cached:
+        logger.info(f"TTS cache hit: '{sentence[:40]}...' " if len(sentence) > 40 else f"TTS cache hit: '{sentence}'")
+        return cached
+
     url  = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key={GEMINI_KEY}"
     body = {
         "contents": [{"parts": [{"text": sentence}]}],
@@ -78,7 +106,10 @@ async def tts_one(client, sentence: str, voice_name: str):
         if "pcm" in mime:
             audio_b64 = b64mod.b64encode(pcm_to_wav(b64mod.b64decode(audio_b64))).decode()
             mime      = "audio/wav"
-        return {"audioContent": audio_b64, "mimeType": mime}
+        result = {"audioContent": audio_b64, "mimeType": mime}
+        # Save to cache
+        _cache_set(sentence, voice_name, result)
+        return result
     except Exception as e:
         logger.error(f"TTS exception: {e}")
         return None
@@ -107,7 +138,7 @@ async def tts_proxy(request: Request):
 
     voice_name = VOICE_MAP[gender]
     sentences  = split_sentences(text)
-    logger.info(f"TTS request: {len(sentences)} sentences, voice={voice_name}")
+    logger.info(f"TTS request: {len(sentences)} sentences, voice={voice_name}, cache_size={len(_tts_cache)}")
 
     async with httpx.AsyncClient() as client:
         results = await asyncio.gather(*[tts_one(client, s, voice_name) for s in sentences])
@@ -139,4 +170,4 @@ async def telegram_proxy(request: Request):
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {"status": "ok", "cache_size": len(_tts_cache)}
