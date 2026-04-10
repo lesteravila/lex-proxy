@@ -9,7 +9,6 @@ Endpoints:
 """
 import os
 import re
-import struct
 import base64 as b64mod
 import asyncio
 import hashlib
@@ -35,8 +34,8 @@ GEMINI_KEY         = os.environ["GEMINI_API_KEY"]
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 
 VOICE_MAP = {
-    "male":   "aura-2-theron-en",
-    "female": "aura-2-luna-en",
+    "male":   "aura-asteria-en",
+    "female": "aura-luna-en",
 }
 
 # ── In-memory TTS cache ───────────────────────────────────────────────────────
@@ -62,7 +61,6 @@ def split_sentences(text: str) -> list:
     return [p.strip() for p in parts if p.strip()]
 
 async def tts_one(client, sentence: str, voice: str):
-    # Check cache first
     cached = _cache_get(sentence, voice)
     if cached:
         logger.info(f"TTS cache hit: '{sentence[:40]}'")
