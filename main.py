@@ -3,7 +3,7 @@ Lex Proxy — Railway deployment
 Keeps all API keys server-side.
 Endpoints:
   POST /llm        — Gemini LLM
-  POST /tts        — Gemini TTS with sentence-level parallelism + caching
+  POST /tts        — Deepgram TTS with caching
   GET  /stt-token  — Deepgram short-lived token
   POST /telegram   — Telegram sendMessage
 """
@@ -34,81 +34,55 @@ DEEPGRAM_KEY       = os.environ["DEEPGRAM_API_KEY"]
 GEMINI_KEY         = os.environ["GEMINI_API_KEY"]
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 
-VOICE_MAP = {"male": "Charon", "female": "Kore"}
+VOICE_MAP = {
+    "male":   "aura-2-theron-en",
+    "female": "aura-2-luna-en",
+}
 
 # ── In-memory TTS cache ───────────────────────────────────────────────────────
-# Key: hash of (sentence + voice), Value: {"audioContent": ..., "mimeType": ...}
-# Stores up to 500 entries — common greetings/phrases are reused across sessions
 _tts_cache: dict = {}
 MAX_CACHE_SIZE = 500
 
-def _cache_key(sentence: str, voice_name: str) -> str:
-    return hashlib.md5(f"{voice_name}:{sentence.strip().lower()}".encode()).hexdigest()
+def _cache_key(sentence: str, voice: str) -> str:
+    return hashlib.md5(f"{voice}:{sentence.strip().lower()}".encode()).hexdigest()
 
-def _cache_get(sentence: str, voice_name: str):
-    return _tts_cache.get(_cache_key(sentence, voice_name))
+def _cache_get(sentence: str, voice: str):
+    return _tts_cache.get(_cache_key(sentence, voice))
 
-def _cache_set(sentence: str, voice_name: str, value: dict):
+def _cache_set(sentence: str, voice: str, value: dict):
     if len(_tts_cache) >= MAX_CACHE_SIZE:
-        # Remove oldest 100 entries when cache is full
         for k in list(_tts_cache.keys())[:100]:
             del _tts_cache[k]
-    _tts_cache[_cache_key(sentence, voice_name)] = value
+    _tts_cache[_cache_key(sentence, voice)] = value
 
 # ─────────────────────────────────────────────────────────────────────────────
-
-def pcm_to_wav(raw: bytes) -> bytes:
-    sr, ch, bits = 24000, 1, 16
-    byte_rate    = sr * ch * bits // 8
-    block_align  = ch * bits // 8
-    data_size    = len(raw)
-    header = struct.pack(
-        '<4sI4s4sIHHIIHH4sI',
-        b'RIFF', 36 + data_size, b'WAVE',
-        b'fmt ', 16, 1,
-        ch, sr, byte_rate, block_align, bits,
-        b'data', data_size
-    )
-    return header + raw
 
 def split_sentences(text: str) -> list:
     parts = re.split(r'(?<=[.!?])\s+', text.strip())
     return [p.strip() for p in parts if p.strip()]
 
-async def tts_one(client, sentence: str, voice_name: str):
+async def tts_one(client, sentence: str, voice: str):
     # Check cache first
-    cached = _cache_get(sentence, voice_name)
+    cached = _cache_get(sentence, voice)
     if cached:
-        logger.info(f"TTS cache hit: '{sentence[:40]}...' " if len(sentence) > 40 else f"TTS cache hit: '{sentence}'")
+        logger.info(f"TTS cache hit: '{sentence[:40]}'")
         return cached
 
-    url  = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key={GEMINI_KEY}"
-    body = {
-        "contents": [{"parts": [{"text": sentence}]}],
-        "generationConfig": {
-            "responseModalities": ["AUDIO"],
-            "speechConfig": {
-                "voiceConfig": {
-                    "prebuiltVoiceConfig": {"voiceName": voice_name}
-                }
-            }
-        }
+    url = f"https://api.deepgram.com/v1/speak?model={voice}&encoding=mp3"
+    headers = {
+        "Authorization": f"Token {DEEPGRAM_KEY}",
+        "Content-Type": "application/json",
     }
+    body = {"text": sentence}
+
     try:
-        resp = await client.post(url, json=body, timeout=20)
+        resp = await client.post(url, json=body, headers=headers, timeout=20)
         if resp.status_code != 200:
-            logger.error(f"TTS API error {resp.status_code}: {resp.text}")
+            logger.error(f"Deepgram TTS error {resp.status_code}: {resp.text}")
             return None
-        data      = resp.json()
-        part      = data["candidates"][0]["content"]["parts"][0]["inlineData"]
-        audio_b64 = part["data"]
-        mime      = part.get("mimeType", "audio/wav")
-        if "pcm" in mime:
-            audio_b64 = b64mod.b64encode(pcm_to_wav(b64mod.b64decode(audio_b64))).decode()
-            mime      = "audio/wav"
-        result = {"audioContent": audio_b64, "mimeType": mime}
-        # Save to cache
-        _cache_set(sentence, voice_name, result)
+        audio_b64 = b64mod.b64encode(resp.content).decode()
+        result = {"audioContent": audio_b64, "mimeType": "audio/mp3"}
+        _cache_set(sentence, voice, result)
         return result
     except Exception as e:
         logger.error(f"TTS exception: {e}")
@@ -129,19 +103,19 @@ async def tts_proxy(request: Request):
     if not text:
         raise HTTPException(status_code=400, detail="text is required")
 
-    voice_raw  = body.get("voice", "male")
+    voice_raw = body.get("voice", "male")
     if isinstance(voice_raw, dict):
         name   = voice_raw.get("name", "")
         gender = "female" if "-F" in name or "female" in name.lower() else "male"
     else:
         gender = "female" if voice_raw == "female" else "male"
 
-    voice_name = VOICE_MAP[gender]
-    sentences  = split_sentences(text)
-    logger.info(f"TTS request: {len(sentences)} sentences, voice={voice_name}, cache_size={len(_tts_cache)}")
+    voice     = VOICE_MAP[gender]
+    sentences = split_sentences(text)
+    logger.info(f"TTS request: {len(sentences)} sentences, voice={voice}, cache_size={len(_tts_cache)}")
 
     async with httpx.AsyncClient() as client:
-        results = await asyncio.gather(*[tts_one(client, s, voice_name) for s in sentences])
+        results = await asyncio.gather(*[tts_one(client, s, voice) for s in sentences])
 
     chunks = [r for r in results if r is not None]
     if not chunks:
