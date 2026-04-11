@@ -89,6 +89,19 @@ async def tts_one(client, sentence: str, voice: str):
 @app.post("/llm")
 async def llm_proxy(request: Request):
     body = await request.json()
+
+    # ── Inject Google Search grounding ───────────────────────────────────────
+    # Gives Lex real-time web knowledge (current games, news, trends etc.)
+    # Only inject if not already present and not a JSON-only response request
+    # (JSON mode is incompatible with search grounding in Gemini API)
+    gen_cfg = body.get("generationConfig", {})
+    is_json_mode = gen_cfg.get("responseMimeType") == "application/json"
+
+    if not is_json_mode:
+        # Free-text responses (idle prompts, goodbye) — add search grounding
+        if "tools" not in body:
+            body["tools"] = [{"google_search": {}}]
+
     url  = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_KEY}"
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(url, json=body)
